@@ -45,11 +45,11 @@ uint32_t previousDataSend;
 
 // Declare pins here
 const int LED_PIN = 48;    // Using built-in LED on pin 48
-const int FAN_PIN = 9;     // Using PWM-capable pin for fan control
+const int FAN_PIN = 8;
 
 // LED and FAN state variables
 volatile bool ledState = false;
-volatile int fanLevel = 0;  // 0-3 scale
+volatile int fanLevel = 0;
 volatile bool ledStateChanged = false;
 volatile bool fanLevelChanged = false;
 constexpr const char LED_STATE_ATTR[] = "led_state";
@@ -95,8 +95,8 @@ emyPxgcYxn/eR44/KJ4EBs+lVDR3veyJm+kXQ99b21/+jh5Xos1AnX5iItreGCc=
 
 constexpr const char RPC_LED_METHOD[] = "setStateLED";
 constexpr const char RPC_FAN_METHOD[] = "setStateFAN";
-constexpr const char RPC_LED_KEY[] = "state";
-constexpr const char RPC_FAN_KEY[] = "level";
+// constexpr const char RPC_LED_KEY[] = "state";
+// constexpr const char RPC_FAN_KEY[] = "level";
 constexpr uint8_t MAX_RPC_SUBSCRIPTIONS = 2U;
 constexpr uint8_t MAX_RPC_RESPONSE = 5U;
 
@@ -117,11 +117,6 @@ ThingsBoard tb(mqttClient, MAX_MESSAGE_RECEIVE_SIZE, MAX_MESSAGE_SEND_SIZE, Defa
 
 // Statuses for subscribing to rpc
 bool subscribed = false;
-
-// Mutex for Serial access
-SemaphoreHandle_t serialMutex;
-// Semaphore to signal WiFi connection
-SemaphoreHandle_t wifiConnectedSemaphore;
 
 /// @brief Processes function for RPC call "led_control"
 /// JsonVariantConst is a JSON variant, that can be queried using operator[]
@@ -166,10 +161,7 @@ void wifiTask(void *pvParameters) {
   while (1) {
     // Check WiFi status
     if (WiFi.status() != WL_CONNECTED) {
-      if (xSemaphoreTake(serialMutex, portMAX_DELAY) == pdTRUE) {
-        Serial.println("Connecting to AP ...");
-        xSemaphoreGive(serialMutex);
-      }
+      Serial.println("Connecting to AP ...");
 
       // Attempt to connect to WiFi
       WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
@@ -177,23 +169,15 @@ void wifiTask(void *pvParameters) {
       // Wait for connection with periodic status updates
       while (WiFi.status() != WL_CONNECTED) {
         vTaskDelay(500 / portTICK_PERIOD_MS);
-        if (xSemaphoreTake(serialMutex, portMAX_DELAY) == pdTRUE) {
-          Serial.print(".");
-          xSemaphoreGive(serialMutex);
-        }
+        Serial.print(".");
       }
 
-      if (xSemaphoreTake(serialMutex, portMAX_DELAY) == pdTRUE) {
-        Serial.print("\nConnected to: ");
-        Serial.println(WiFi.localIP());
-        xSemaphoreGive(serialMutex);
-      }
+      Serial.print("\nConnected to: ");
+      Serial.println(WiFi.localIP());
 
 #if ENCRYPTED
       espClient.setCACert(ROOT_CERT);
 #endif
-      // Signal that WiFi is connected
-      xSemaphoreGive(wifiConnectedSemaphore);
     }
 
     // Periodically check WiFi status
@@ -203,22 +187,11 @@ void wifiTask(void *pvParameters) {
 
 // Task 2: ThingsBoard connection and RPC subscription
 void thingsboardTask(void *pvParameters) {
-  // Wait for WiFi to be connected
-  if (xSemaphoreTake(wifiConnectedSemaphore, portMAX_DELAY) == pdTRUE) {
-    xSemaphoreGive(wifiConnectedSemaphore); // Release it back for future use
-  }
-
   while (1) {
     if (!tb.connected()) {
-      if (xSemaphoreTake(serialMutex, portMAX_DELAY) == pdTRUE) {
-        Serial.printf("Connecting to: (%s) with token (%s)\n", THINGSBOARD_SERVER, TOKEN);
-        xSemaphoreGive(serialMutex);
-      }
+      Serial.printf("Connecting to: (%s) with token (%s)\n", THINGSBOARD_SERVER, TOKEN);
       if (!tb.connect(THINGSBOARD_SERVER, TOKEN, THINGSBOARD_PORT)) {
-        if (xSemaphoreTake(serialMutex, portMAX_DELAY) == pdTRUE) {
-          Serial.println("Failed to connect");
-          xSemaphoreGive(serialMutex);
-        }
+        Serial.println("Failed to connect");
         vTaskDelay(1000 / portTICK_PERIOD_MS);
         continue;
       }
@@ -226,26 +199,17 @@ void thingsboardTask(void *pvParameters) {
     }
 
     if (!subscribed) {
-      if (xSemaphoreTake(serialMutex, portMAX_DELAY) == pdTRUE) {
-        Serial.println("Subscribing for RPC...");
-        xSemaphoreGive(serialMutex);
-      }
+      Serial.println("Subscribing for RPC...");
       const std::array<RPC_Callback, MAX_RPC_SUBSCRIPTIONS> callbacks = {
         RPC_Callback{RPC_LED_METHOD, processLEDControl},
         RPC_Callback{RPC_FAN_METHOD, processFanControl}
       };
       if (!rpc.RPC_Subscribe(callbacks.cbegin(), callbacks.cend())) {
-        if (xSemaphoreTake(serialMutex, portMAX_DELAY) == pdTRUE) {
-          Serial.println("Failed to subscribe for RPC");
-          xSemaphoreGive(serialMutex);
-        }
+        Serial.println("Failed to subscribe for RPC");
         vTaskDelay(1000 / portTICK_PERIOD_MS);
         continue;
       }
-      if (xSemaphoreTake(serialMutex, portMAX_DELAY) == pdTRUE) {
-        Serial.println("Subscribe done");
-        xSemaphoreGive(serialMutex);
-      }
+      Serial.println("Subscribe done");
       subscribed = true;
     }
 
@@ -256,11 +220,6 @@ void thingsboardTask(void *pvParameters) {
 
 // Task 3: DHT20 sensor reading and telemetry sending
 void dht20Task(void *pvParameters) {
-  // Wait for WiFi to be connected
-  if (xSemaphoreTake(wifiConnectedSemaphore, portMAX_DELAY) == pdTRUE) {
-    xSemaphoreGive(wifiConnectedSemaphore); // Release it back
-  }
-  
   char buffer[64]; // Buffer for formatted output
   while (1) {
     if (tb.connected()) {
@@ -277,15 +236,12 @@ void dht20Task(void *pvParameters) {
           }
         }
 
-        if (xSemaphoreTake(serialMutex, portMAX_DELAY) == pdTRUE) {
-          if (isnan(temperature) || isnan(humidity)) {
-            Serial.println("Failed to read from DHT20 sensor!");
-          } else {
-            // Format the entire message into a buffer
-            snprintf(buffer, sizeof(buffer), "Temperature: %.2f °C, Humidity: %.2f %%", temperature, humidity);
-            Serial.println(buffer);
-          }
-          xSemaphoreGive(serialMutex);
+        if (isnan(temperature) || isnan(humidity)) {
+          Serial.println("Failed to read from DHT20 sensor!");
+        } else {
+          // Format the entire message into a buffer
+          snprintf(buffer, sizeof(buffer), "Temperature: %.2f °C, Humidity: %.2f %%", temperature, humidity);
+          Serial.println(buffer);
         }
 
         if (!isnan(temperature) && !isnan(humidity)) {
@@ -308,20 +264,13 @@ void dht20Task(void *pvParameters) {
 
 // Task 4: LED Control Task (monitors ThingsBoard commands)
 void ledControlTask(void *pvParameters) {
-  if (xSemaphoreTake(wifiConnectedSemaphore, portMAX_DELAY) == pdTRUE) {
-    xSemaphoreGive(wifiConnectedSemaphore);
-  }
-  
   while (1) {
     if (ledStateChanged) {
-      if (xSemaphoreTake(serialMutex, portMAX_DELAY) == pdTRUE) {
-        digitalWrite(LED_PIN, ledState);
-        Serial.print("LED state is set to: ");
-        Serial.println(ledState);
-        tb.sendAttributeData(LED_STATE_ATTR, ledState);
-        ledStateChanged = false;
-        xSemaphoreGive(serialMutex);
-      }
+      digitalWrite(LED_PIN, ledState);
+      Serial.print("LED state is set to: ");
+      Serial.println(ledState);
+      tb.sendAttributeData(LED_STATE_ATTR, ledState);
+      ledStateChanged = false;
     }
     vTaskDelay(10 / portTICK_PERIOD_MS); // Faster polling
   }
@@ -329,22 +278,14 @@ void ledControlTask(void *pvParameters) {
 
 // Task 5: FAN Control Task (monitors ThingsBoard commands)
 void fanControlTask(void *pvParameters) {
-  if (xSemaphoreTake(wifiConnectedSemaphore, portMAX_DELAY) == pdTRUE) {
-    xSemaphoreGive(wifiConnectedSemaphore);
-  }
-  
   while (1) {
     if (fanLevelChanged) {
-      if (xSemaphoreTake(serialMutex, portMAX_DELAY) == pdTRUE) {
-        int pwm_value = map(fanLevel, 0, 3, 0, 255);
-        analogWrite(FAN_PIN, pwm_value);
-        Serial.print("FAN level is set to: ");
-        Serial.println(fanLevel);
-        tb.sendAttributeData(FAN_LEVEL_ATTR, fanLevel);
-        fanLevelChanged = false;
-        xSemaphoreGive(serialMutex);
-      }
+      Serial.print("FAN level is set to: ");
+      Serial.println(fanLevel);
+      tb.sendAttributeData(FAN_LEVEL_ATTR, fanLevel);
+      fanLevelChanged = false;
     }
+    analogWrite(FAN_PIN, fanLevel);
     vTaskDelay(10 / portTICK_PERIOD_MS); // Faster polling
   }
 }
@@ -354,20 +295,6 @@ void setup()
   Serial.begin(SERIAL_DEBUG_BAUD);
   delay(3000);
 
-  // Create Serial mutex
-  serialMutex = xSemaphoreCreateMutex();
-  if (serialMutex == NULL) {
-    Serial.println("Failed to create Serial mutex!");
-    while (1); // Halt if mutex creation fails
-  }
-
-  // Create WiFi connected semaphore
-  wifiConnectedSemaphore = xSemaphoreCreateBinary();
-  if (wifiConnectedSemaphore == NULL) {
-    Serial.println("Failed to create WiFi connected semaphore!");
-    while (1);
-  }
-
   // Initialize I2C foro DHT20
   Wire.begin(GPIO_NUM_11, GPIO_NUM_12);
   dht20.begin();
@@ -375,14 +302,12 @@ void setup()
   // Initialize pins
   pinMode(LED_PIN, OUTPUT);
   pinMode(FAN_PIN, OUTPUT);
-  digitalWrite(LED_PIN, LOW);  // Initial state off
-  analogWrite(FAN_PIN, 0);     // Initial fan off
 
   xTaskCreate(wifiTask, "WiFi Task", 4096, NULL, 2, NULL);
   xTaskCreate(thingsboardTask, "ThingsBoard Task", 8192, NULL, 1, NULL);
   xTaskCreate(dht20Task, "DHT20 Task", 16384, NULL, 0, NULL);
-  xTaskCreate(ledControlTask, "LED Control Task", 16384, NULL, 0, NULL);
-  xTaskCreate(fanControlTask, "FAN Control Task", 16384, NULL, 0, NULL);
+  xTaskCreate(ledControlTask, "LED Control Task", 32768, NULL, 0, NULL);
+  xTaskCreate(fanControlTask, "FAN Control Task", 65536, NULL, 0, NULL);
 }
 
 void loop()
